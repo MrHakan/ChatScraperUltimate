@@ -1,0 +1,30 @@
+{
+  "twitch": {
+    "keywords": [
+      "aternos",
+      "exaroton"
+    ],
+    "targetDomains": [
+      "aternos.me",
+      "exaroton.me"
+    ],
+    "maxViewers": 10,
+    "maxVODs": 1,
+    "scanIntervalMinutes": 10,
+    "autoStart": false
+  },
+  "kick": {
+    "keywords": [
+      "aternos",
+      "exaroton"
+    ],
+    "targetDomains": [
+      "aternos.me",
+      "exaroton.me"
+    ],
+    "waitTimeMinutes": 10,
+    "categoryId": 10,
+    "headless": true,
+    "autoStart": false
+  }
+}

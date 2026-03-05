@@ -1,0 +1,20 @@
+{
+    "name": "chatscraperultimate",
+    "version": "1.0.0",
+    "description": "Unified terminal UI combining TwitchChatScraper and KickChatScraper into a TMUX-like management system.",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "node --watch index.js"
+    },
+    "author": "AgalarDevelopment",
+    "license": "ISC",
+    "dependencies": {
+        "blessed": "^0.1.81",
+        "blessed-contrib": "^4.11.0",
+        "dotenv": "^16.4.5",
+        "puppeteer": "^24.37.5",
+        "puppeteer-extra": "^3.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2"
+    }
+}

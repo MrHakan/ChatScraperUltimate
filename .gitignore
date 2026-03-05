@@ -1,0 +1,21 @@
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules/
+
+# Environment Variables
+.env
+.env.local
+config/twitch.env
+config/kick.env
+
+# Cache
+cache/
+
+# OS Configs
+.DS_Store
+.vscode/
+.idea/

@@ -1,9 +1,10 @@
 "use strict";
 
 const blessed = require('blessed');
+const { stateBadge } = require('../../utils/colors');
 
 /**
- * Horizontal control bar with action buttons and status indicators.
+ * Horizontal control bar with action hotkeys and live status indicators.
  * @module ControlBar
  * @param {blessed.Widgets.BoxElement} parent
  * @param {object} opts
@@ -22,24 +23,44 @@ function createControlBar(parent, { top, left, width, height, color }) {
             fg: 'white',
         },
         tags: true,
+        padding: { left: 1 },
         content: '',
     });
 }
 
 /**
- * Generates the control bar content string with current states.
+ * Generates the control bar content string with current states and modes.
  * @param {string} twitchState
  * @param {string} kickState
+ * @param {object} [opts]
+ * @param {string} [opts.spinner] - Current spinner animation frame
+ * @param {string} [opts.filter] - Active log level filter ('all', 'info', ...)
+ * @param {string} [opts.view] - Active main view ('logs' | 'matches')
+ * @param {string} [opts.notice] - Transient message (e.g. quit confirmation)
  * @returns {string}
  */
-function formatControlBar(twitchState, kickState) {
-    const tIcon = twitchState === 'running' ? '{green-fg}●{/green-fg}' : '{red-fg}○{/red-fg}';
-    const kIcon = kickState === 'running' ? '{green-fg}●{/green-fg}' : '{red-fg}○{/red-fg}';
+function formatControlBar(twitchState, kickState, opts = {}) {
+    if (opts.notice) {
+        return `{yellow-fg}{bold}${opts.notice}{/bold}{/yellow-fg}`;
+    }
+
+    const key = (k, label) => `{black-fg}{cyan-bg} ${k} {/cyan-bg}{/black-fg}${label}`;
+    const filter = (opts.filter || 'all').toUpperCase();
+    const view = (opts.view || 'logs').toUpperCase();
+    const filterTag = filter === 'ALL'
+        ? `{gray-fg}${filter}{/gray-fg}`
+        : `{yellow-fg}{bold}${filter}{/bold}{/yellow-fg}`;
 
     return [
-        `{cyan-fg}[S]{/cyan-fg}tart  {cyan-fg}[X]{/cyan-fg}Stop  {cyan-fg}[P]{/cyan-fg}ause  {cyan-fg}[R]{/cyan-fg}esume  {cyan-fg}[Ctrl+R]{/cyan-fg}estart`,
-        `Twitch: ${tIcon} ${twitchState.toUpperCase().padEnd(8)}   Kick: ${kIcon} ${kickState.toUpperCase().padEnd(8)}   {cyan-fg}[Tab]{/cyan-fg} Switch  {cyan-fg}[Q]{/cyan-fg} Quit`,
-    ].join('  │  ');
+        key('S', 'tart'),
+        key('X', ' Stop'),
+        key('P', 'ause'),
+        key('R', 'esume'),
+        key('F', ` ${filterTag}`),
+        key('M', ` ${view}`),
+        key('?', ' Help'),
+        `{|}Twitch ${stateBadge(twitchState, opts.spinner)}  Kick ${stateBadge(kickState, opts.spinner)} `,
+    ].join('  ');
 }
 
 module.exports = { createControlBar, formatControlBar };

@@ -1,5 +1,9 @@
 "use strict";
 
+const fs = require('fs');
+const path = require('path');
+const { LEVEL_COLORS, SOURCE_COLORS } = require('../utils/colors');
+
 /**
  * Aggregates log events from all sources into a scrollback buffer.
  * Why: Provides a unified log stream that the UI's LogBox can render,
@@ -54,7 +58,8 @@ class LogManager {
     }
 
     /**
-     * Formats a log entry into a single display string.
+     * Formats a log entry into a single display string with blessed color
+     * tags — timestamps dimmed, sources brand-colored, levels severity-colored.
      * @param {object} entry
      * @returns {string}
      */
@@ -62,9 +67,49 @@ class LogManager {
         const ts = entry.timestamp instanceof Date
             ? entry.timestamp.toLocaleTimeString()
             : new Date(entry.timestamp).toLocaleTimeString();
-        const lvl = entry.level.toUpperCase().padEnd(5);
-        const src = entry.source.toUpperCase().padEnd(6);
+        const level = (entry.level || 'info').toLowerCase();
+        const lvlColor = LEVEL_COLORS[level] || 'white';
+        const srcColor = SOURCE_COLORS[(entry.source || '').toLowerCase()] || 'white';
+        const lvl = level.toUpperCase().padEnd(5);
+        const src = (entry.source || '?').toUpperCase().padEnd(6);
+        const msg = level === 'error'
+            ? `{red-fg}${entry.message}{/red-fg}`
+            : entry.message;
+        return `{gray-fg}${ts}{/gray-fg} {${srcColor}-fg}${src}{/${srcColor}-fg} {${lvlColor}-fg}${lvl}{/${lvlColor}-fg} ${msg}`;
+    }
+
+    /**
+     * Formats a log entry as plain text (no color tags) for file export.
+     * @param {object} entry
+     * @returns {string}
+     */
+    formatEntryPlain(entry) {
+        const ts = entry.timestamp instanceof Date
+            ? entry.timestamp.toISOString()
+            : new Date(entry.timestamp).toISOString();
+        const lvl = (entry.level || 'info').toUpperCase().padEnd(5);
+        const src = (entry.source || '?').toUpperCase().padEnd(6);
         return `[${ts}] [${src}] [${lvl}] ${entry.message}`;
+    }
+
+    /**
+     * Writes the current buffer to a timestamped file under logs/.
+     * @param {string} [dir] - Target directory (defaults to <project>/logs)
+     * @returns {string} Absolute path of the written file
+     */
+    exportToFile(dir) {
+        const targetDir = dir || path.resolve(__dirname, '../../logs');
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filePath = path.join(targetDir, `export-${stamp}.log`);
+        const lines = this.buffer.map((e) => this.formatEntryPlain(e));
+        fs.writeFileSync(filePath, lines.join('\n') + '\n');
+        return filePath;
+    }
+
+    /** Empties the scrollback buffer. */
+    clear() {
+        this.buffer = [];
     }
 }
 

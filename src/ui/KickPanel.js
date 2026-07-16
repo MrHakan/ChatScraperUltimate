@@ -1,11 +1,14 @@
 "use strict";
 
+const blessed = require('blessed');
 const { createGridBox } = require('./components/GridBox');
 const { createLogBox } = require('./components/LogBox');
+const { BRAND, stateBadge } = require('../utils/colors');
 
 /**
  * Kick scraper panel (Green #53FC18).
- * Displays the Kick scraper's real-time output and match results.
+ * Displays the Kick scraper's real-time output and match results,
+ * with a live status line (state badge, spinner, match counter).
  * @module KickPanel
  */
 class KickPanel {
@@ -16,11 +19,13 @@ class KickPanel {
     constructor(screen, eventBus) {
         this.screen = screen;
         this.eventBus = eventBus;
+        this._state = 'stopped';
+        this._matches = 0;
 
         // Container
         this.container = createGridBox(screen, {
             label: 'KICK SCRAPER',
-            color: '#53FC18',
+            color: BRAND.KICK,
             top: '40%',
             left: '50%',
             width: '50%',
@@ -28,20 +33,21 @@ class KickPanel {
         });
 
         // Status line
-        this.statusBox = require('blessed').box({
+        this.statusBox = blessed.box({
             parent: this.container,
             top: 0,
             left: 0,
             width: '100%',
             height: 1,
             tags: true,
-            style: { fg: '#53FC18' },
-            content: '{#53FC18-fg}Status:{/#53FC18-fg} STOPPED',
+            padding: { left: 1 },
+            style: { fg: BRAND.KICK },
         });
+        this._renderStatus();
 
         // Output log
         this.outputLog = createLogBox(this.container, {
-            color: '#53FC18',
+            color: BRAND.KICK,
             top: 1,
             left: 0,
             width: '100%',
@@ -54,25 +60,42 @@ class KickPanel {
             const ts = entry.timestamp instanceof Date
                 ? entry.timestamp.toLocaleTimeString()
                 : new Date(entry.timestamp).toLocaleTimeString();
-            this.outputLog.log(`[${ts}] ${entry.message}`);
+            const msg = entry.level === 'error'
+                ? `{red-fg}${entry.message}{/red-fg}`
+                : entry.message;
+            this.outputLog.log(`{gray-fg}${ts}{/gray-fg} ${msg}`);
         });
 
         // Listen for kick match events
         this.eventBus.subscribe('match', (data) => {
             if (data.source !== 'kick') return;
+            this._matches++;
             const d = data.data;
-            const prefix = d.isDomain ? '{green-fg}[DOMAIN]{/green-fg}' : '{yellow-fg}[MATCH]{/yellow-fg}';
-            this.outputLog.log(`${prefix} [${d.source}] ${d.channelName || '?'}: ${(d.content || '').slice(0, 120)}`);
+            const badge = d.isDomain
+                ? '{black-fg}{green-bg} DOMAIN {/green-bg}{/black-fg}'
+                : '{black-fg}{yellow-bg} MATCH {/yellow-bg}{/black-fg}';
+            this.outputLog.log(`${badge} {bold}${d.channelName || '?'}{/bold}: ${(d.content || '').slice(0, 120)}`);
+            this._renderStatus();
         });
     }
 
     /**
      * Updates the status line.
      * @param {string} state
+     * @param {{spinner?: string}} [opts]
      */
-    updateStatus(state) {
-        const color = state === 'running' ? 'green' : state === 'error' ? 'red' : '#53FC18';
-        this.statusBox.setContent(`{${color}-fg}Status:{/${color}-fg} ${state.toUpperCase()}`);
+    updateStatus(state, opts = {}) {
+        this._state = state;
+        this._spinner = opts.spinner;
+        this._renderStatus();
+    }
+
+    /** Renders the composed status line content. */
+    _renderStatus() {
+        const matches = this._matches > 0
+            ? `{yellow-fg}★ ${this._matches} matches{/yellow-fg}`
+            : '{gray-fg}★ 0 matches{/gray-fg}';
+        this.statusBox.setContent(`${stateBadge(this._state, this._spinner)}  ${matches}`);
     }
 
     /** Makes this panel focusable. */

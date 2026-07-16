@@ -69,7 +69,7 @@ class App {
         this.eventBus.publish('log', {
             source: 'app',
             level: 'info',
-            message: 'ChatScraperUltimate started (multithreaded). Press [S] to start scrapers, [Q] to quit.',
+            message: 'ChatScraperUltimate started (multithreaded). Press [S] to start scrapers, [?] for help, [Q] to quit.',
             timestamp: new Date(),
         });
 

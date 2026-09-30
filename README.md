@@ -13,13 +13,14 @@ npm run demo
 
 The demo uses sample streams, makes no network requests and sends no webhooks. It has a separate history file, so sample servers never enter your real inbox.
 
-For live scanning:
+For live scanning, install the browser explicitly (also works when npm disables dependency install scripts):
 
 ```sh
+npx puppeteer browsers install chrome
 npm start
 ```
 
-On first launch the app creates `config/twitch.env` and `config/kick.env`. Add a Twitch client ID and client secret for Twitch scanning. Kick uses the Chromium browser installed by Puppeteer and requires no Twitch credentials. Discord webhooks are optional.
+On first launch the app creates `config/twitch.env` and `config/kick.env`. Add a Twitch client ID and client secret for Twitch scanning. Kick uses the Chromium browser installed by the command above and requires no Twitch credentials. Discord webhooks are optional.
 
 ```dotenv
 # config/twitch.env

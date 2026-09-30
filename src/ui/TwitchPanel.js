@@ -1,6 +1,7 @@
 "use strict";
 
 const blessed = require('blessed');
+const { safe } = require('../utils/display');
 const { createGridBox } = require('./components/GridBox');
 const { createLogBox } = require('./components/LogBox');
 const { BRAND, stateBadge } = require('../utils/colors');
@@ -55,28 +56,30 @@ class TwitchPanel {
         });
 
         // Listen for twitch-only log events
-        this.eventBus.subscribe('log', (entry) => {
+        this._logHandler = (entry) => {
             if (entry.source !== 'twitch') return;
             const ts = entry.timestamp instanceof Date
                 ? entry.timestamp.toLocaleTimeString()
                 : new Date(entry.timestamp).toLocaleTimeString();
             const msg = entry.level === 'error'
-                ? `{red-fg}${entry.message}{/red-fg}`
-                : entry.message;
+                ? `{red-fg}${safe(entry.message)}{/red-fg}`
+                : safe(entry.message);
             this.outputLog.log(`{gray-fg}${ts}{/gray-fg} ${msg}`);
-        });
+        };
+        this.eventBus.subscribe('log', this._logHandler);
 
         // Listen for twitch match events
-        this.eventBus.subscribe('match', (data) => {
+        this._matchHandler = (data) => {
             if (data.source !== 'twitch') return;
             this._matches++;
             const d = data.data;
             const badge = d.isDomain
                 ? '{black-fg}{green-bg} DOMAIN {/green-bg}{/black-fg}'
                 : '{black-fg}{yellow-bg} MATCH {/yellow-bg}{/black-fg}';
-            this.outputLog.log(`${badge} {bold}${d.streamer || '?'}{/bold} · ${d.user || '?'}: ${(d.message || '').slice(0, 120)}`);
+            this.outputLog.log(`${badge} {bold}${safe(d.streamer || '?')}{/bold} · ${safe(d.user || '?')}: ${safe((d.message || '').slice(0, 120))}`);
             this._renderStatus();
-        });
+        };
+        this.eventBus.subscribe('match', this._matchHandler);
     }
 
     /**
@@ -96,6 +99,19 @@ class TwitchPanel {
             ? `{yellow-fg}★ ${this._matches} matches{/yellow-fg}`
             : '{gray-fg}★ 0 matches{/gray-fg}';
         this.statusBox.setContent(`${stateBadge(this._state, this._spinner)}  ${matches}`);
+    }
+
+    resize() {
+        const width = Math.max(1, this.container.width - this.container.iwidth);
+        const height = Math.max(1, this.container.height - this.container.iheight);
+        this.statusBox.width = width;
+        this.outputLog.width = width;
+        this.outputLog.height = height - 1;
+    }
+
+    destroy() {
+        this.eventBus.unsubscribe('log', this._logHandler);
+        this.eventBus.unsubscribe('match', this._matchHandler);
     }
 
     /** Makes this panel focusable. */

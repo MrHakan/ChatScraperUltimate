@@ -2,204 +2,114 @@
 
 const { createGridBox } = require('./components/GridBox');
 const { createLogBox } = require('./components/LogBox');
-const { createStatsBox, formatStats } = require('./components/StatsBox');
-const { createControlBar, formatControlBar } = require('./components/ControlBar');
-const { BRAND } = require('../utils/colors');
+const { createStatsBox } = require('./components/StatsBox');
+const { createControlBar } = require('./components/ControlBar');
+const DiscoveryInbox = require('./DiscoveryInbox');
+const { BRAND, stateBadge } = require('../utils/colors');
+const { safe } = require('../utils/display');
 
-/**
- * Main Manager panel (Aqua).
- * Contains the combined log viewer (switchable to a match feed),
- * stats summaries, and the control bar.
- *
- * Functionality:
- *  - Log level filter (all → info → warn → error), replayed from buffer
- *  - Logs / Matches view toggle
- * @module MainPanel
- */
 class MainPanel {
-    /**
-     * @param {blessed.Widgets.Screen} screen
-     * @param {import('../core/EventBus')} eventBus
-     * @param {import('../core/LogManager')} logManager
-     * @param {import('../core/StatsManager')} statsManager
-     */
-    constructor(screen, eventBus, logManager, statsManager) {
+    constructor(screen, eventBus, logManager, statsManager, discoveries) {
         this.screen = screen;
         this.eventBus = eventBus;
         this.logManager = logManager;
         this.statsManager = statsManager;
-
-        /** @type {'all'|'info'|'warn'|'error'} Active log level filter */
         this.levelFilter = 'all';
-        /** @type {'logs'|'matches'} Active right-side view */
-        this.view = 'logs';
-        /** @type {string[]} Rolling feed of formatted match lines */
+        this.view = 'inbox';
         this._matchFeed = [];
-        this._matchFeedLimit = 200;
-
-        // Container (below the 1-line header bar)
-        this.container = createGridBox(screen, {
-            label: 'MAIN MANAGER',
-            color: 'cyan',
-            top: 1,
-            left: 0,
-            width: '100%',
-            height: '40%-1',
-        });
-
-        // Stats boxes (left side)
-        this.twitchStats = createStatsBox(this.container, {
-            label: 'Twitch Stats',
-            color: BRAND.TWITCH,
-            top: 0,
-            left: 0,
-            width: '25%',
-            height: '100%-3',
-        });
-
-        this.kickStats = createStatsBox(this.container, {
-            label: 'Kick Stats',
-            color: BRAND.KICK,
-            top: 0,
-            left: '25%',
-            width: '25%',
-            height: '100%-3',
-        });
-
-        // Log / match viewer (right side)
-        this.logBox = createLogBox(this.container, {
-            label: 'Logs',
-            color: 'cyan',
-            top: 0,
-            left: '50%',
-            width: '50%',
-            height: '100%-3',
-        });
-
-        // Control bar (bottom)
-        this.controlBar = createControlBar(this.container, {
-            top: '100%-3',
-            left: 0,
-            width: '100%',
-            height: 3,
-            color: 'cyan',
-        });
-
-        // Listen for log events — respect view and filter
-        this.eventBus.subscribe('log', (entry) => {
-            if (this.view !== 'logs') return;
-            if (!this._passesFilter(entry)) return;
-            this.logBox.log(this.logManager.formatEntry(entry));
-        });
-
-        // Collect matches from both scrapers into a unified feed
-        this.eventBus.subscribe('match', (data) => {
-            const line = this._formatMatch(data);
+        this.container = createGridBox(screen, { label: 'DISCOVERY WORKSPACE', color: 'cyan', top: 1, left: 0, width: '100%', height: '60%-1' });
+        this.twitchStats = createStatsBox(this.container, { label: 'Twitch', color: BRAND.TWITCH, top: 0, left: 0, width: '50%', height: 5 });
+        this.kickStats = createStatsBox(this.container, { label: 'Kick', color: BRAND.KICK, top: 0, left: '50%', width: '50%', height: 5 });
+        this.logBox = createLogBox(this.container, { label: 'Logs', color: 'cyan', top: 5, left: 0, width: '100%', height: '100%-8' });
+        this.logBox.hide();
+        this.inbox = new DiscoveryInbox(this.container, discoveries);
+        this.controlBar = createControlBar(this.container, { top: '100%-3', left: 0, width: '100%', height: 3, color: 'cyan' });
+        this._logHandler = entry => {
+            if (this.view === 'logs' && this._passesFilter(entry)) this.logBox.log(this.logManager.formatEntry(entry));
+        };
+        this._matchHandler = event => {
+            const d = event.data || {};
+            const line = `{cyan-fg}${safe(event.source.toUpperCase())}{/cyan-fg} ${d.isDomain ? '{green-fg}SERVER{/green-fg}' : 'KEYWORD'} {bold}${safe(d.streamer || d.channelName || '?')}{/bold}: ${safe((d.message || d.content || '').slice(0, 200))}`;
             this._matchFeed.push(line);
-            if (this._matchFeed.length > this._matchFeedLimit) {
-                this._matchFeed.splice(0, this._matchFeed.length - this._matchFeedLimit);
-            }
+            if (this._matchFeed.length > 200) this._matchFeed.shift();
             if (this.view === 'matches') this.logBox.log(line);
-        });
+        };
+        eventBus.subscribe('log', this._logHandler);
+        eventBus.subscribe('match', this._matchHandler);
     }
 
-    /**
-     * Formats a match event into a single feed line.
-     * @param {{source: string, data: object}} data
-     */
-    _formatMatch(data) {
-        const d = data.data || {};
-        const ts = new Date().toLocaleTimeString();
-        const srcColor = data.source === 'twitch' ? BRAND.TWITCH : BRAND.KICK;
-        const src = (data.source || '?').toUpperCase().padEnd(6);
-        const badge = d.isDomain
-            ? '{black-fg}{green-bg} DOMAIN {/green-bg}{/black-fg}'
-            : '{black-fg}{yellow-bg} MATCH {/yellow-bg}{/black-fg}';
-        const who = d.streamer || d.channelName || '?';
-        const text = (d.message || d.content || '').slice(0, 140);
-        return `{gray-fg}${ts}{/gray-fg} {${srcColor}-fg}${src}{/${srcColor}-fg} ${badge} {bold}${who}{/bold}: ${text}`;
-    }
-
-    /**
-     * @param {object} entry
-     * @returns {boolean} Whether the entry passes the active level filter
-     */
-    _passesFilter(entry) {
-        if (this.levelFilter === 'all') return true;
-        return (entry.level || 'info').toLowerCase() === this.levelFilter;
-    }
-
-    /** Cycles the log level filter and re-renders the log view. */
+    _passesFilter(entry) { return this.levelFilter === 'all' || (entry.level || 'info').toLowerCase() === this.levelFilter; }
     cycleFilter() {
-        const order = ['all', 'info', 'warn', 'error'];
-        this.levelFilter = order[(order.indexOf(this.levelFilter) + 1) % order.length];
+        if (this.view === 'inbox') { this.inbox.cycle('source'); return; }
+        const levels = ['all', 'info', 'warn', 'error'];
+        this.levelFilter = levels[(levels.indexOf(this.levelFilter) + 1) % levels.length];
         if (this.view === 'logs') this._replay();
         this._updateLabel();
     }
-
-    /** Toggles between the unified log stream and the match feed. */
     toggleView() {
-        this.view = this.view === 'logs' ? 'matches' : 'logs';
-        this._replay();
-        this._updateLabel();
+        const views = ['inbox', 'logs', 'matches'];
+        this.setView(views[(views.indexOf(this.view) + 1) % views.length]);
     }
-
-    /** Clears the visible viewer and (for logs view) the backing buffer. */
+    setView(view) {
+        this.view = view;
+        if (view === 'inbox') { this.logBox.hide(); this.inbox.container.show(); this.inbox.refresh(true); }
+        else { this.inbox.container.hide(); this.logBox.show(); this._replay(); }
+        this._updateLabel();
+        this.focus();
+    }
     clear() {
-        if (this.view === 'matches') {
-            this._matchFeed = [];
-        } else {
-            this.logManager.clear();
-        }
+        if (this.view === 'inbox') { this.inbox.search(''); return; }
+        if (this.view === 'matches') this._matchFeed = [];
+        else this.logManager.clear();
         this.logBox.setContent('');
     }
-
-    /** Re-renders the viewer content from the appropriate backing buffer. */
     _replay() {
-        let lines;
-        if (this.view === 'matches') {
-            lines = this._matchFeed;
-        } else {
-            lines = this.logManager
-                .getLogs(this.levelFilter === 'all' ? {} : { level: this.levelFilter })
-                .map((e) => this.logManager.formatEntry(e));
-        }
+        const lines = this.view === 'matches' ? this._matchFeed : this.logManager.getLogs().filter(e => this._passesFilter(e)).map(e => this.logManager.formatEntry(e));
         this.logBox.setContent(lines.join('\n'));
         this.logBox.setScrollPerc(100);
     }
+    _updateLabel() { this.logBox.setLabel(` ${this.view === 'matches' ? 'Matches' : `Logs / ${this.levelFilter.toUpperCase()}`} `); }
 
-    /** Updates the viewer's border label to reflect view + filter. */
-    _updateLabel() {
-        const base = this.view === 'matches' ? 'Matches ★' : 'Logs';
-        const filter = this.view === 'logs' && this.levelFilter !== 'all'
-            ? ` · ${this.levelFilter.toUpperCase()}`
-            : '';
-        this.logBox.setLabel(` ${base}${filter} `);
+    resize() {
+        const width = Math.max(1, this.container.width - this.container.iwidth);
+        const height = Math.max(1, this.container.height - this.container.iheight);
+        this._small = width < 76;
+        const summaryHeight = this._small ? 4 : 5;
+        const half = Math.floor(width / 2);
+        this.twitchStats.width = half;
+        this.kickStats.left = half;
+        this.kickStats.width = width - half;
+        this.twitchStats.height = this.kickStats.height = summaryHeight;
+        for (const viewer of [this.inbox.container, this.logBox]) {
+            viewer.top = summaryHeight;
+            viewer.width = width;
+            viewer.height = Math.max(3, height - summaryHeight - 3);
+        }
+        this.controlBar.top = height - 3;
+        this.controlBar.width = width;
+        this.inbox.resize();
     }
 
-    /**
-     * Refreshes the stats display and control bar.
-     * @param {string} twitchState
-     * @param {string} kickState
-     * @param {object} [opts] - { spinner, notice }
-     */
-    update(twitchState, kickState, opts = {}) {
-        const ts = this.statsManager.getStats('twitch');
-        const ks = this.statsManager.getStats('kick');
-        this.twitchStats.setContent(formatStats(ts, BRAND.TWITCH));
-        this.kickStats.setContent(formatStats(ks, BRAND.KICK));
-        this.controlBar.setContent(formatControlBar(twitchState, kickState, {
-            spinner: opts.spinner,
-            notice: opts.notice,
-            filter: this.levelFilter,
-            view: this.view,
-        }));
+    update(twitchState, kickState, { spinner, notice } = {}) {
+        const format = (source, state) => {
+            const s = this.statsManager.getStats(source);
+            if (this._small) return `${stateBadge(state, spinner)}  ${s.scanned} scanned\n${s.matches} matches | ${s.errors} errors`;
+            return `${stateBadge(state, spinner)}  ${s.scanned} scanned | ${s.matches} matches\n${s.scansPerMin}/min | ${s.cacheHits} cached | ${s.errors} errors\n${s.lastScanTime ? `Last cycle ${new Date(s.lastScanTime).toLocaleTimeString()}` : 'Ready for first scan'}`;
+        };
+        this.twitchStats.setContent(format('twitch', twitchState));
+        this.kickStats.setContent(format('kick', kickState));
+        this.inbox.refresh();
+        const compact = this.screen.width < 110;
+        const controls = this.view === 'inbox'
+            ? compact ? '/ Find  B Star  A Archive  Y Copy  M Views  ? Help' : '/ Search  V Source  T Status  O Sort  B Favorite  A Archive  Y Copy  E Export  M Views'
+            : `F ${this.levelFilter.toUpperCase()}  E Export  C Clear  M Views  S Start  P Pause  R Resume  X Stop  ? Help`;
+        this.controlBar.setContent(notice ? `{yellow-fg}${safe(notice)}{/yellow-fg}` : `{cyan-fg}${controls}{/cyan-fg}`);
     }
-
-    /** Makes this panel focusable. */
-    focus() {
-        this.logBox.focus();
+    focus() { if (this.view === 'inbox') this.inbox.focus(); else this.logBox.focus(); }
+    destroy() {
+        this.eventBus.unsubscribe('log', this._logHandler);
+        this.eventBus.unsubscribe('match', this._matchHandler);
+        this.inbox.destroy();
     }
 }
-
 module.exports = MainPanel;

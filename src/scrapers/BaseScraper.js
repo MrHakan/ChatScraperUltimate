@@ -1,157 +1,132 @@
 "use strict";
 
 const EventEmitter = require('events');
-
-/**
- * Abstract base class for all scrapers.
- * Implements a state machine and event emission contract.
- * Why: Enforces a consistent lifecycle (start/stop/pause/resume) and
- * event interface so the ControlManager and UI can treat all scrapers uniformly.
- * @module BaseScraper
- */
-
-/** @readonly @enum {string} */
-const STATES = {
-    STOPPED: 'stopped',
-    STARTING: 'starting',
-    RUNNING: 'running',
-    PAUSED: 'paused',
-    STOPPING: 'stopping',
-    ERROR: 'error',
-};
+const STATES = Object.freeze({ STOPPED: 'stopped', STARTING: 'starting', RUNNING: 'running', PAUSED: 'paused', STOPPING: 'stopping', ERROR: 'error' });
 
 class BaseScraper extends EventEmitter {
-    /**
-     * @param {string} name - Scraper identifier ('twitch' or 'kick')
-     * @param {object} config - Merged configuration object
-     * @param {import('../core/EventBus')} eventBus
-     */
     constructor(name, config, eventBus) {
         super();
         this.name = name;
         this.config = config;
         this.eventBus = eventBus;
         this.state = STATES.STOPPED;
-        /** @type {boolean} Flag checked by the scan loop to know when to exit */
         this._running = false;
-        /** @type {Function|null} Resolver function to break out of a sleep early */
-        this._sleepResolve = null;
+        this._abortController = null;
+        this._loopPromise = null;
+        this._sleeps = new Set();
     }
 
-    /**
-     * Transitions state and publishes a state event.
-     * @param {string} newState
-     * @param {string} [errorMsg]
-     */
-    setState(newState) {
-        const prev = this.state;
-        this.state = newState;
-        const payload = { source: this.name, state: newState, previousState: prev };
+    setState(state) {
+        if (this.state === state) return;
+        const payload = { source: this.name, state, previousState: this.state };
+        this.state = state;
         this.emit('state', payload);
         this.eventBus.publish('state', payload);
     }
 
-    /**
-     * Emits a structured log event.
-     * @param {'info'|'warn'|'error'|'debug'} level
-     * @param {string} message
-     */
-    log(level, message) {
-        const payload = { source: this.name, level, message, timestamp: new Date() };
-        this.eventBus.publish('log', payload);
-    }
-
-    /**
-     * Emits a match event when a keyword is found.
-     * @param {object} data - Match details
-     */
+    log(level, message) { this.eventBus.publish('log', { source: this.name, level, message, timestamp: new Date() }); }
     reportMatch(data) {
+        if (!this._running) return;
         const payload = { source: this.name, data };
         this.emit('match', payload);
         this.eventBus.publish('match', payload);
     }
+    reportStats(metrics) { this.eventBus.publish('stats', { source: this.name, metrics }); }
 
-    /**
-     * Emits a stats update event.
-     * @param {object} metrics
-     */
-    reportStats(metrics) {
-        this.eventBus.publish('stats', { source: this.name, metrics });
-    }
-
-    /**
-     * Sleeps for a given duration but can be interrupted by stop().
-     * @param {number} ms - Milliseconds to sleep
-     * @returns {Promise<void>}
-     */
     sleep(ms) {
-        return new Promise((resolve) => {
-            this._sleepResolve = resolve;
-            this._sleepTimer = setTimeout(() => {
-                this._sleepResolve = null;
-                resolve();
-            }, ms);
+        if (!this._running) return Promise.resolve();
+        return new Promise(resolve => {
+            const wake = () => { clearTimeout(timer); this._sleeps.delete(wake); resolve(); };
+            const timer = setTimeout(wake, ms);
+            this._sleeps.add(wake);
         });
     }
+    _wakeUp() { for (const wake of [...this._sleeps]) wake(); }
+    _cancel() {
+        this._running = false;
+        this._abortController?.abort();
+        this._wakeUp();
+    }
 
-    /** Wakes up from a sleep() call early, used by stop(). */
-    _wakeUp() {
-        if (this._sleepTimer) clearTimeout(this._sleepTimer);
-        if (this._sleepResolve) {
-            this._sleepResolve();
-            this._sleepResolve = null;
+    async initialize() { throw new Error('initialize() must be implemented'); }
+    async prepareResume() {}
+
+    async start() {
+        if (![STATES.STOPPED, STATES.ERROR].includes(this.state)) return;
+        this._running = true;
+        this._abortController = new AbortController();
+        this.setState(STATES.STARTING);
+        try {
+            await this.initialize();
+            if (!this._running) return;
+            this.setState(STATES.RUNNING);
+            this._launchLoop();
+        } catch (error) {
+            if (!this._running && [STATES.STOPPED, STATES.STOPPING].includes(this.state)) return;
+            this._cancel();
+            this.setState(STATES.ERROR);
+            throw error;
         }
     }
 
-    /**
-     * Override in subclass: one-time resource allocation.
-     * @abstract
-     */
-    async initialize() {
-        throw new Error('initialize() must be implemented by subclass');
+    _launchLoop() {
+        this._loopPromise = this._scanLoop().catch(error => {
+            this._cancel();
+            this.log('error', `Loop crashed: ${error.message}`);
+            this.setState(STATES.ERROR);
+        });
     }
 
-    /**
-     * Starts the scraper's continuous scan loop.
-     * @returns {Promise<void>}
-     */
-    async start() {
-        if (this.state !== STATES.STOPPED && this.state !== STATES.ERROR) return;
-        this._running = true;
-        this.setState(STATES.STARTING);
+    async _scanLoop() {
+        const interval = (this.config.scanIntervalMinutes ?? this.config.waitTimeMinutes ?? 10) * 60000;
+        while (this._running) {
+            try {
+                this.log('info', 'Scan cycle starting');
+                await this._performScan();
+                if (this._running) {
+                    this.reportStats({ lastScanTime: new Date() });
+                    this.log('info', `Scan complete; next cycle in ${interval / 60000}m`);
+                }
+            } catch (error) {
+                if (!this._running) break;
+                this.log('error', `Scan failed: ${error.message}`);
+                this.reportStats({ errors: 1 });
+                await this.recover?.();
+            }
+            if (this._running) await this.sleep(interval);
+        }
     }
 
-    /**
-     * Gracefully stops the scraper and releases resources.
-     * @returns {Promise<void>}
-     */
-    async stop() {
-        if (this.state === STATES.STOPPED) return;
-        this._running = false;
-        this._wakeUp();
-        this.setState(STATES.STOPPING);
-        this.setState(STATES.STOPPED);
-    }
-
-    /**
-     * Pauses the scraper (resources held).
-     * @returns {Promise<void>}
-     */
     async pause() {
         if (this.state !== STATES.RUNNING) return;
-        this._running = false;
-        this._wakeUp();
+        this._cancel();
+        await this._loopPromise;
         this.setState(STATES.PAUSED);
     }
 
-    /**
-     * Resumes a paused scraper.
-     * @returns {Promise<void>}
-     */
     async resume() {
         if (this.state !== STATES.PAUSED) return;
+        // pause joins the previous cycle before this creates another one.
         this._running = true;
-        this.setState(STATES.RUNNING);
+        this._abortController = new AbortController();
+        try {
+            await this.prepareResume();
+            this.setState(STATES.RUNNING);
+            this._launchLoop();
+        } catch (error) {
+            this._cancel();
+            this.setState(STATES.ERROR);
+            throw error;
+        }
+    }
+
+    async stop() {
+        if (this.state === STATES.STOPPED) return;
+        this.setState(STATES.STOPPING);
+        this._cancel();
+        await this._loopPromise;
+        this._loopPromise = null;
+        this.setState(STATES.STOPPED);
     }
 }
 

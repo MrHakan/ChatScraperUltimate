@@ -11,7 +11,10 @@
     "maxViewers": 10,
     "maxVODs": 1,
     "scanIntervalMinutes": 10,
-    "autoStart": false
+    "autoStart": false,
+    "maxDownloads": 3,
+    "cacheTTLMinutes": 360,
+    "maxCachedVODs": 2000
   },
   "kick": {
     "keywords": [

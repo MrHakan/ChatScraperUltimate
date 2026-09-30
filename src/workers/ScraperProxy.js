@@ -3,127 +3,100 @@
 const { Worker } = require('worker_threads');
 const path = require('path');
 
-/**
- * Proxy class that the main thread uses in place of actual Scraper instances.
- * Implements the same interface (state, start, stop, pause, resume) so
- * the ControlManager and UI work without any changes.
- *
- * Why: The ControlManager calls scraper.start(), checks scraper.state, etc.
- * This proxy translates those calls into postMessage commands sent to the
- * worker thread, and translates incoming worker messages back into EventBus
- * events on the main thread.
- *
- * @module ScraperProxy
- */
 class ScraperProxy {
-    /**
-     * @param {string} name - 'twitch' or 'kick'
-     * @param {object} config - Merged config for the scraper
-     * @param {import('../core/EventBus')} eventBus - Main thread EventBus
-     */
-    constructor(name, config, eventBus) {
+    constructor(name, config, eventBus, options = {}) {
         this.name = name;
         this.config = config;
         this.eventBus = eventBus;
         this.state = 'stopped';
-        /** @type {Worker|null} */
         this._worker = null;
+        this._stopPromise = null;
+        this._stopTimeoutMs = options.stopTimeoutMs ?? 5000;
+        this._workerFactory = options.workerFactory || ((file, options) => new Worker(file, options));
     }
 
-    /** Spawns the worker thread and wires message handlers. */
+    _setState(state) {
+        if (this.state === state) return;
+        const previousState = this.state;
+        this.state = state;
+        this.eventBus.publish('state', { source: this.name, state, previousState });
+    }
+
+    _log(level, message) { this.eventBus.publish('log', { source: this.name, level, message, timestamp: new Date() }); }
+
     _spawnWorker() {
-        const workerFile = this.name === 'twitch'
-            ? path.join(__dirname, '../workers/twitch.worker.js')
-            : path.join(__dirname, '../workers/kick.worker.js');
-
-        this._worker = new Worker(workerFile, {
-            workerData: { config: this.config },
-        });
-
-        // Forward worker events to main thread EventBus
-        this._worker.on('message', (msg) => {
-            // Update local state mirror when worker reports state changes
-            if (msg.type === 'state' && msg.data) {
-                this.state = msg.data.state;
-            }
-            // Republish to main EventBus so UI picks it up
-            if (msg.type && msg.data) {
+        const worker = this._workerFactory(path.join(__dirname, `${this.name}.worker.js`), { workerData: { config: this.config } });
+        this._worker = worker;
+        worker.on('message', msg => {
+            if (this._worker !== worker || !msg.data) return;
+            if (msg.type === 'state') {
+                // Stop wins over late startup/pause acknowledgements.
+                if (this.state === 'stopping' && msg.data.state !== 'stopped') return;
+                this._setState(msg.data.state);
+                if (msg.data.state === 'stopped') this._finishStop?.();
+            } else if (['log', 'stats', 'match'].includes(msg.type)) {
                 this.eventBus.publish(msg.type, msg.data);
             }
         });
-
-        this._worker.on('error', (err) => {
-            this.state = 'error';
-            this.eventBus.publish('log', {
-                source: this.name,
-                level: 'error',
-                message: `Worker error: ${err.message}`,
-                timestamp: new Date(),
-            });
-            this.eventBus.publish('state', {
-                source: this.name,
-                state: 'error',
-                previousState: this.state,
-            });
+        worker.on('error', error => {
+            if (this._worker !== worker) return;
+            this._log('error', `Worker failed: ${error.message}`);
+            if (this.state === 'stopping') this._finishStop?.();
+            else this._setState('error');
         });
-
-        this._worker.on('exit', (code) => {
-            if (code !== 0 && this.state !== 'stopped') {
-                this.state = 'error';
-                this.eventBus.publish('log', {
-                    source: this.name,
-                    level: 'error',
-                    message: `Worker exited with code ${code}`,
-                    timestamp: new Date(),
-                });
+        worker.on('exit', code => {
+            if (this._worker !== worker) return;
+            this._worker = null;
+            if (this.state === 'stopping' || this.state === 'stopped') {
+                this._setState('stopped');
+                this._finishStop?.();
+            } else {
+                this._log('error', `Worker exited unexpectedly (${code}); press S to retry`);
+                this._setState('error');
             }
         });
     }
 
-    /** Sends a command to the worker */
-    _send(command) {
-        if (this._worker) {
-            this._worker.postMessage({ type: 'command', command });
-        }
-    }
+    _send(command) { this._worker?.postMessage({ type: 'command', command }); }
 
-    /**
-     * Starts the scraper — spawns a worker thread if not running.
-     * @returns {Promise<void>}
-     */
     async start() {
-        if (!this._worker) this._spawnWorker();
-        this._send('start');
+        if (!['stopped', 'error'].includes(this.state)) return;
+        if (this._stopPromise) await this._stopPromise;
+        if (this._worker) await this.stop();
+        this._setState('starting');
+        try { this._spawnWorker(); this._send('start'); }
+        catch (error) { this._setState('error'); throw error; }
     }
 
-    /**
-     * Stops the scraper and terminates the worker.
-     * @returns {Promise<void>}
-     */
-    async stop() {
-        this._send('stop');
-        // Give the worker a moment to clean up, then force-terminate
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        if (this._worker) {
-            await this._worker.terminate();
-            this._worker = null;
-        }
-        this.state = 'stopped';
+    stop() {
+        if (this._stopPromise) return this._stopPromise;
+        const worker = this._worker;
+        if (!worker) { this._setState('stopped'); return Promise.resolve(); }
+        this._setState('stopping');
+        this._stopPromise = (async () => {
+            await new Promise(resolve => {
+                const timer = setTimeout(() => { this._log('warn', 'Cleanup timed out; terminating worker'); finish(); }, this._stopTimeoutMs);
+                const finish = () => { clearTimeout(timer); this._finishStop = null; resolve(); };
+                this._finishStop = finish;
+                try { this._send('stop'); } catch { finish(); }
+            });
+            // Detach before terminating: an old worker's exit cannot mark a new
+            // generation as failed or overwrite its state.
+            if (this._worker === worker) this._worker = null;
+            await worker.terminate();
+            this._setState('stopped');
+        })().finally(() => { this._stopPromise = null; });
+        return this._stopPromise;
     }
 
-    /**
-     * Pauses the scraper.
-     * @returns {Promise<void>}
-     */
     async pause() {
+        if (this.state !== 'running') return;
+        this._setState('paused');
         this._send('pause');
     }
-
-    /**
-     * Resumes the scraper.
-     * @returns {Promise<void>}
-     */
     async resume() {
+        if (this.state !== 'paused') return;
+        this._setState('running');
         this._send('resume');
     }
 }

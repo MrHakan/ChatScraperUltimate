@@ -2,139 +2,84 @@
 
 const fs = require('fs');
 const path = require('path');
+const dotenv = require('dotenv');
 
-/**
- * Reads and writes per-scraper .env configuration files and the global app.json.
- * Why: Centralizes all config I/O so scrapers never touch the filesystem directly.
- * @module ConfigManager
- */
+const DEFAULT_APP = {
+    twitch: { keywords: ['aternos', 'exaroton'], targetDomains: ['aternos.me', 'exaroton.me'], maxViewers: 10, maxVODs: 1, maxDownloads: 3, cacheTTLMinutes: 360, maxCachedVODs: 2000, scanIntervalMinutes: 10, autoStart: false },
+    kick: { keywords: ['aternos', 'exaroton'], targetDomains: ['aternos.me', 'exaroton.me'], waitTimeMinutes: 10, categoryId: 10, headless: true, autoStart: false },
+};
+
+function validate(app) {
+    if (!app || typeof app !== 'object' || Array.isArray(app)) throw new Error('app.json must contain an object');
+    const result = {};
+    for (const source of ['twitch', 'kick']) {
+        if (app[source] != null && (typeof app[source] !== 'object' || Array.isArray(app[source]))) throw new Error(`${source} must contain an object`);
+        const cfg = { ...DEFAULT_APP[source], ...app[source] };
+        for (const key of ['keywords', 'targetDomains']) {
+            if (!Array.isArray(cfg[key]) || !cfg[key].length || cfg[key].some(v => typeof v !== 'string' || !v.trim())) throw new Error(`${source}.${key} must contain nonempty strings`);
+            cfg[key] = cfg[key].map(v => v.trim().toLowerCase());
+        }
+        if (cfg.targetDomains.some(v => !/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/.test(v))) throw new Error(`${source}.targetDomains must contain DNS suffixes`);
+        for (const key of ['autoStart', 'headless']) {
+            if (cfg[key] != null && typeof cfg[key] !== 'boolean') throw new Error(`${source}.${key} must be true or false`);
+        }
+        const limits = { maxViewers: [0, 10000000], maxVODs: [1, 100], maxDownloads: [1, 10], maxCachedVODs: [1, 10000], categoryId: [1, 1000000], scanIntervalMinutes: [0.1, 1440], waitTimeMinutes: [0.1, 1440], cacheTTLMinutes: [1, 43200] };
+        for (const [key, [min, max]] of Object.entries(limits)) {
+            if (cfg[key] == null) continue;
+            if (typeof cfg[key] !== 'number' || !Number.isFinite(cfg[key]) || cfg[key] < min || cfg[key] > max || (!key.endsWith('Minutes') && !Number.isInteger(cfg[key]))) throw new Error(`${source}.${key} must be a number between ${min} and ${max}`);
+        }
+        result[source] = cfg;
+    }
+    return result;
+}
+
 class ConfigManager {
-    /**
-     * @param {import('./EventBus')} eventBus
-     */
-    constructor(eventBus) {
+    constructor(eventBus, options = {}) {
         this.eventBus = eventBus;
-        this.configDir = path.resolve(__dirname, '../../config');
+        this.configDir = options.configDir || path.resolve(__dirname, '../../config');
         this._configs = { twitch: {}, kick: {}, app: {} };
-        this._ensureConfigDir();
-    }
-
-    /** Creates config directory and template files if they don't exist. */
-    _ensureConfigDir() {
-        if (!fs.existsSync(this.configDir)) fs.mkdirSync(this.configDir, { recursive: true });
-
-        const twitchEnv = path.join(this.configDir, 'twitch.env');
-        if (!fs.existsSync(twitchEnv)) {
-            fs.writeFileSync(twitchEnv, [
-                'TWITCH_CLIENT_ID=your_client_id_here',
-                'TWITCH_CLIENT_SECRET=your_client_secret_here',
-                'DISCORD_WEBHOOK=',
-            ].join('\n'));
-        }
-
-        const kickEnv = path.join(this.configDir, 'kick.env');
-        if (!fs.existsSync(kickEnv)) {
-            fs.writeFileSync(kickEnv, 'DISCORD_WEBHOOK_URL=\n');
-        }
-
-        const appJson = path.join(this.configDir, 'app.json');
-        if (!fs.existsSync(appJson)) {
-            fs.writeFileSync(appJson, JSON.stringify({
-                twitch: {
-                    keywords: ['aternos', 'exaroton'],
-                    targetDomains: ['aternos.me', 'exaroton.me'],
-                    maxViewers: 10,
-                    maxVODs: 1,
-                    scanIntervalMinutes: 10,
-                    autoStart: false,
-                },
-                kick: {
-                    keywords: ['aternos', 'exaroton'],
-                    targetDomains: ['aternos.me', 'exaroton.me'],
-                    waitTimeMinutes: 10,
-                    categoryId: 10,
-                    headless: true,
-                    autoStart: false,
-                },
-            }, null, 2));
+        fs.mkdirSync(this.configDir, { recursive: true });
+        const templates = {
+            'twitch.env': 'TWITCH_CLIENT_ID=your_client_id_here\nTWITCH_CLIENT_SECRET=your_client_secret_here\nDISCORD_WEBHOOK=\n',
+            'kick.env': 'DISCORD_WEBHOOK_URL=\n',
+            'app.json': JSON.stringify(DEFAULT_APP, null, 2) + '\n',
+        };
+        for (const [name, content] of Object.entries(templates)) {
+            const file = path.join(this.configDir, name);
+            if (!fs.existsSync(file)) fs.writeFileSync(file, content, { mode: name.endsWith('.env') ? 0o600 : 0o644 });
         }
     }
 
-    /**
-     * Parses a .env file into a key-value object.
-     * @param {string} filePath
-     * @returns {Object<string, string>}
-     */
-    _parseEnv(filePath) {
-        const result = {};
-        if (!fs.existsSync(filePath)) return result;
-        const content = fs.readFileSync(filePath, 'utf8');
-        for (const line of content.split('\n')) {
-            const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?$/);
-            if (match) {
-                result[match[1]] = (match[2] || '').replace(/(^['"]|['"]$)/g, '').trim();
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Writes a key-value object back to a .env file.
-     * @param {string} filePath
-     * @param {Object<string, string>} data
-     */
-    _writeEnv(filePath, data) {
-        const lines = Object.entries(data).map(([k, v]) => `${k}=${v}`);
-        fs.writeFileSync(filePath, lines.join('\n') + '\n');
-    }
-
-    /** Loads all configuration files into memory. */
     loadAll() {
-        this._configs.twitch = this._parseEnv(path.join(this.configDir, 'twitch.env'));
-        this._configs.kick = this._parseEnv(path.join(this.configDir, 'kick.env'));
-        try {
-            this._configs.app = JSON.parse(fs.readFileSync(path.join(this.configDir, 'app.json'), 'utf8'));
-        } catch {
-            this._configs.app = {};
-        }
+        this._configs.twitch = dotenv.parse(fs.readFileSync(path.join(this.configDir, 'twitch.env')));
+        this._configs.kick = dotenv.parse(fs.readFileSync(path.join(this.configDir, 'kick.env')));
+        try { this._configs.app = validate(JSON.parse(fs.readFileSync(path.join(this.configDir, 'app.json'), 'utf8'))); }
+        catch (error) { throw new Error(`Invalid config/app.json: ${error.message}`); }
     }
 
-    /**
-     * Gets a config value for a scraper.
-     * @param {'twitch'|'kick'|'app'} target
-     * @param {string} [key] - Dot-notation key. If omitted, returns entire config.
-     * @returns {*}
-     */
     get(target, key) {
         const cfg = this._configs[target] || {};
-        if (!key) return { ...cfg };
-        return key.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), cfg);
+        const value = key ? key.split('.').reduce((o, k) => o?.[k], cfg) : cfg;
+        return value === undefined ? undefined : structuredClone(value);
     }
 
-    /**
-     * Sets a config value and persists it.
-     * @param {'twitch'|'kick'|'app'} target
-     * @param {string} key
-     * @param {*} value
-     */
     set(target, key, value) {
-        if (!this._configs[target]) this._configs[target] = {};
-        if (target === 'app') {
-            const keys = key.split('.');
-            let obj = this._configs.app;
-            for (let i = 0; i < keys.length - 1; i++) {
-                if (!obj[keys[i]]) obj[keys[i]] = {};
-                obj = obj[keys[i]];
-            }
-            obj[keys[keys.length - 1]] = value;
-            fs.writeFileSync(path.join(this.configDir, 'app.json'), JSON.stringify(this._configs.app, null, 2));
-        } else {
-            this._configs[target][key] = value;
-            const envFile = target === 'twitch' ? 'twitch.env' : 'kick.env';
-            this._writeEnv(path.join(this.configDir, envFile), this._configs[target]);
-        }
+        if (!['app', 'twitch', 'kick'].includes(target)) throw new Error('Unknown configuration target');
+        const next = this.get(target);
+        let cfg = next;
+        const keys = target === 'app' ? key.split('.') : [key];
+        if (keys.some(k => ['__proto__', 'constructor', 'prototype'].includes(k))) throw new Error('Invalid configuration key');
+        for (const k of keys.slice(0, -1)) cfg = cfg[k] ||= {};
+        cfg[keys.at(-1)] = value;
+        const checked = target === 'app' ? validate(next) : next;
+        const name = target === 'app' ? 'app.json' : `${target}.env`;
+        const content = target === 'app' ? JSON.stringify(checked, null, 2) + '\n' : Object.entries(checked).map(([k, v]) => `${k}=${JSON.stringify(String(v))}`).join('\n') + '\n';
+        fs.writeFileSync(path.join(this.configDir, name), content, { mode: target === 'app' ? 0o644 : 0o600 });
+        this._configs[target] = checked;
         this.eventBus.publish('config', { target, key, value });
     }
 }
 
+ConfigManager.validate = validate;
+ConfigManager.DEFAULT_APP = DEFAULT_APP;
 module.exports = ConfigManager;

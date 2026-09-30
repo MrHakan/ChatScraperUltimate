@@ -4,7 +4,7 @@ A terminal workspace for finding Minecraft server addresses in Twitch streams, T
 
 ## Get started
 
-Requires **Node.js 22.8+** and an interactive terminal.
+Requires **Node.js 22.12+** and an interactive terminal.
 
 ```sh
 npm ci
@@ -77,7 +77,7 @@ Small terminals show one panel at a time. Tab and the number keys switch panels;
 
 ## Configuration
 
-`config/app.json` contains per-source settings. Existing settings are merged with defaults; malformed JSON or invalid values fail with an actionable message instead of silently resetting them. Restart a source after changing its settings and relaunch the app to load the file.
+`config/app.json` contains per-source settings. Existing settings are merged with defaults; malformed JSON or invalid values fail with an actionable message instead of silently resetting them. Relaunch the app after editing the file to load the new settings.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -106,4 +106,4 @@ npm run check
 npm test
 ```
 
-The regression suite covers address parsing, persistence, cross-source deduplication, exports, notifications, cancellation, real worker shutdown, cache pagination and terminal interaction at 160×50, 80×24 and 60×20. CI runs syntax checks and tests on Node.js 22 and 24 without credentials or a Chromium download.
+The regression suite covers address parsing, persistence, cross-source deduplication, exports, notifications, cancellation, real worker shutdown, cache pagination and terminal interaction at 160×50, 80×24 and 60×20. CI runs syntax checks and tests on Node.js 22 and 24 without credentials. A separate browser smoke check verifies Puppeteer Extra and Stealth against a local data URL, including browser cleanup.

@@ -23,7 +23,7 @@ class TerminalUI {
     }
 
     initialize() {
-        this.screen = blessed.screen({ smartCSR: true, title: 'ChatScraperUltimate', fullUnicode: true, ...this.screenOptions });
+        this.screen = blessed.screen({ smartCSR: true, title: 'ChatScraperUltimate', fullUnicode: true, ignoreLocked: ['C-c'], ...this.screenOptions });
         this.headerBar = createHeaderBar(this.screen);
         this.mainPanel = new MainPanel(this.screen, this.eventBus, this.logManager, this.statsManager, this.discoveries);
         this.twitchPanel = new TwitchPanel(this.screen, this.eventBus);

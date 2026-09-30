@@ -95,3 +95,15 @@ test('search typing does not trigger global scraper, view or quit shortcuts', as
     assert.equal(ui._modal, null);
     assert.equal(ui.mainPanel.inbox.filters.search, 'sparrow');
 });
+
+test('Ctrl+C remains available while the search prompt captures other keys', async t => {
+    const { ui, bus, input } = setup(t, 80, 24);
+    let quits = 0;
+    bus.subscribe('app:quit', () => { quits++; });
+    ui._search();
+    await new Promise(resolve => setImmediate(resolve));
+    input.write('\x03');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(quits, 1);
+    input.write('\x1b');
+});

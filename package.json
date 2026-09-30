@@ -7,7 +7,7 @@
     "start": "node index.js",
     "dev": "node --watch index.js",
     "demo": "node index.js --demo",
-    "test": "node --test --test-isolation=none",
+    "test": "node --test --experimental-test-isolation=none",
     "check": "node scripts/check.js"
   },
   "author": "AgalarDevelopment",
@@ -15,11 +15,11 @@
   "dependencies": {
     "blessed": "^0.1.81",
     "dotenv": "^16.4.5",
-    "puppeteer": "^24.37.5",
+    "puppeteer": "^25.12.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "engines": {
-    "node": ">=22.8.0"
+    "node": ">=22.12.0"
   }
 }

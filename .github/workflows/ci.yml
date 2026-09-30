@@ -9,6 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         node: [22, 24]
     env:
@@ -22,3 +23,17 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+  browser-smoke:
+    runs-on: ubuntu-latest
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_CACHE_DIR: ${{ runner.temp }}/csu-browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx puppeteer browsers install chrome
+      - run: node scripts/browser-smoke.js

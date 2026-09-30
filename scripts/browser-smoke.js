@@ -18,7 +18,7 @@ puppeteer.use(require('puppeteer-extra-plugin-stealth')());
         await page.evaluate(() => { window.__csuRequest = new AbortController(); window.__csuRequest.abort(); });
         assert.equal(await page.evaluate(() => window.__csuRequest.signal.aborted), true);
         await browser.close();
-        assert.equal(browser.isConnected(), false);
+        assert.equal(browser.connected, false);
         console.log('Chromium + Puppeteer Extra/Stealth: launch, page APIs, evaluation and cleanup passed (local data URL only).');
     } finally {
         controller.abort();

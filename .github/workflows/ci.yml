@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PUPPETEER_SKIP_DOWNLOAD: 'true'
-      PUPPETEER_CACHE_DIR: ${{ runner.temp }}/csu-browser
+      PUPPETEER_CACHE_DIR: /tmp/csu-browser
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

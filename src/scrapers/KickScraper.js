@@ -32,7 +32,7 @@ class KickScraper extends BaseScraper {
     }
 
     async prepareResume() {
-        if (!this.browser?.isConnected() || this.page?.isClosed()) await this.initialize();
+        if (!this.browser?.connected || this.page?.isClosed()) await this.initialize();
     }
     async recover() { if (this._running) await this.initialize(); }
 

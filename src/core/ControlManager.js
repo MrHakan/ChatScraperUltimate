@@ -10,7 +10,7 @@
 /** Valid state transitions: current state → allowed commands */
 const VALID_TRANSITIONS = {
     stopped: ['start'],
-    starting: [],
+    starting: ['stop'],
     running: ['stop', 'pause'],
     paused: ['stop', 'resume'],
     stopping: [],
@@ -27,6 +27,7 @@ class ControlManager {
         this.eventBus = eventBus;
         this.scrapers = scrapers;
         this.statsManager = statsManager;
+        this._queues = {};
     }
 
     /**
@@ -49,6 +50,15 @@ class ControlManager {
      * @returns {Promise<boolean>} Whether the command was accepted
      */
     async execute(name, command) {
+        const queued = (this._queues[name] || Promise.resolve()).then(() => this._execute(name, command)).catch(error => {
+            this.eventBus.publish('log', { source: name, level: 'error', message: `Cannot ${command}: ${error.message}`, timestamp: new Date() });
+            return false;
+        });
+        this._queues[name] = queued;
+        return queued;
+    }
+
+    async _execute(name, command) {
         const scraper = this.scrapers[name];
         if (!scraper) return false;
 

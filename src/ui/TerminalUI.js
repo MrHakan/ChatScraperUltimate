@@ -8,275 +8,184 @@ const { createHeaderBar, formatHeaderBar } = require('./components/HeaderBar');
 const { createHelpOverlay } = require('./components/HelpOverlay');
 const { SPINNER_FRAMES } = require('../utils/colors');
 
-/** Default grid geometry per panel index (0=main, 1=twitch, 2=kick). */
-const PANEL_GEOMETRY = [
-    { top: 1, left: 0, width: '100%', height: '40%-1' },
-    { top: '40%', left: 0, width: '50%', height: '60%' },
-    { top: '40%', left: '50%', width: '50%', height: '60%' },
-];
-
-/** Geometry used when a panel is zoomed to fill the screen (below header). */
-const ZOOM_GEOMETRY = { top: 1, left: 0, width: '100%', height: '100%-1' };
-
-/**
- * Main terminal UI manager.
- * Initializes the blessed screen, creates the header bar, all 3 panels and
- * the help overlay, wires keyboard shortcuts, and drives the refresh loop
- * (spinner animation, clock, stats).
- * @module TerminalUI
- */
 class TerminalUI {
-    /**
-     * @param {import('../core/EventBus')} eventBus
-     * @param {import('../core/LogManager')} logManager
-     * @param {import('../core/StatsManager')} statsManager
-     * @param {import('../core/ControlManager')} controlManager
-     */
-    constructor(eventBus, logManager, statsManager, controlManager) {
-        this.eventBus = eventBus;
-        this.logManager = logManager;
-        this.statsManager = statsManager;
-        this.controlManager = controlManager;
-
+    constructor(eventBus, logManager, statsManager, controlManager, discoveries, options = {}) {
+        Object.assign(this, { eventBus, logManager, statsManager, controlManager, discoveries });
+        this.demo = options.demo || false;
+        this.screenOptions = options.screenOptions || {};
         this.screen = null;
-        this.headerBar = null;
-        this.helpOverlay = null;
-        this.mainPanel = null;
-        this.twitchPanel = null;
-        this.kickPanel = null;
-        this._focusedPanel = 0; // 0=main, 1=twitch, 2=kick
+        this._focusedPanel = 0;
         this._zoomed = false;
         this._spinnerIndex = 0;
-        this._notice = null; // { text, until } transient control-bar message
+        this._notice = null;
+        this._modal = null;
         this._quitArmed = false;
-        this._refreshInterval = null;
     }
 
-    /** Initializes the blessed screen and creates all panels. */
     initialize() {
-        this.screen = blessed.screen({
-            smartCSR: true,
-            title: 'ChatScraperUltimate',
-            fullUnicode: true,
-        });
-
-        // Header bar (1 line, full width)
+        this.screen = blessed.screen({ smartCSR: true, title: 'ChatScraperUltimate', fullUnicode: true, ...this.screenOptions });
         this.headerBar = createHeaderBar(this.screen);
-
-        // Create panels
-        this.mainPanel = new MainPanel(this.screen, this.eventBus, this.logManager, this.statsManager);
+        this.mainPanel = new MainPanel(this.screen, this.eventBus, this.logManager, this.statsManager, this.discoveries);
         this.twitchPanel = new TwitchPanel(this.screen, this.eventBus);
         this.kickPanel = new KickPanel(this.screen, this.eventBus);
-
-        // Help overlay (hidden until toggled)
         this.helpOverlay = createHelpOverlay(this.screen);
-
-        // Wire keyboard shortcuts
+        this.prompt = blessed.prompt({ parent: this.screen, top: 'center', left: 'center', width: '80%', height: 9, border: 'line', label: ' Search inbox ', style: { border: { fg: 'cyan' }, bg: 'black' } });
         this._setupKeys();
-
-        // Wire state change events to update panel status lines
-        this.eventBus.subscribe('state', (data) => {
-            if (data.source === 'twitch') this.twitchPanel.updateStatus(data.state, { spinner: this._spinner() });
-            if (data.source === 'kick') this.kickPanel.updateStatus(data.state, { spinner: this._spinner() });
-            this._refresh();
+        this._stateHandler = () => this._refresh();
+        this.eventBus.subscribe('state', this._stateHandler);
+        this.screen.on('resize', () => this._applyLayout());
+        [this.mainPanel.inbox.list, this.mainPanel.logBox, this.twitchPanel.outputLog, this.kickPanel.outputLog].forEach((widget, i) => {
+            widget.on('focus', () => {
+                const panel = i < 2 ? 0 : i - 1;
+                if (this._focusedPanel === panel) return;
+                this._focusedPanel = panel;
+                this._applyLayout();
+            });
         });
-
-        // Periodic refresh for stats/uptime/spinner/clock
         this._refreshInterval = setInterval(() => {
             this._spinnerIndex = (this._spinnerIndex + 1) % SPINNER_FRAMES.length;
             this._refresh();
         }, 250);
-
-        // Initial render
-        this._refresh();
-        this.screen.render();
+        this._applyLayout();
+        this.mainPanel.focus();
     }
 
-    /** @returns {string} Current spinner animation frame */
-    _spinner() {
-        return SPINNER_FRAMES[this._spinnerIndex];
-    }
-
-    /** Registers all keyboard shortcuts on the screen. */
     _setupKeys() {
-        const s = this.screen;
-
-        // Quit — double-press safety on 'q', Ctrl+C is immediate
-        s.key(['q'], () => this._requestQuit());
-        s.key(['C-c'], () => { this.eventBus.publish('app:quit'); });
-
-        // Panel switching
-        s.key(['tab'], () => {
-            this._focusedPanel = (this._focusedPanel + 1) % 3;
-            this._focusCurrentPanel();
-        });
-        s.key(['1'], () => { this._focusedPanel = 0; this._focusCurrentPanel(); });
-        s.key(['2'], () => { this._focusedPanel = 1; this._focusCurrentPanel(); });
-        s.key(['3'], () => { this._focusedPanel = 2; this._focusCurrentPanel(); });
-
-        // Zoom focused panel (tmux-style)
-        s.key(['z'], () => {
-            this._zoomed = !this._zoomed;
-            this._applyLayout();
-        });
-
-        // Scraper controls — target = currently focused panel's scraper
-        s.key(['s'], () => this._controlFocused('start'));
-        s.key(['x'], () => this._controlFocused('stop'));
-        s.key(['p'], () => this._controlFocused('pause'));
-        s.key(['r'], () => this._controlFocused('resume'));
-        s.key(['C-r'], () => this._controlFocused('restart'));
-
-        // Log tools
-        s.key(['f'], () => { this.mainPanel.cycleFilter(); this._refresh(); });
-        s.key(['m'], () => { this.mainPanel.toggleView(); this._refresh(); });
-        s.key(['e'], () => this._exportLogs());
-        s.key(['c'], () => {
-            this.mainPanel.clear();
-            this._showNotice('Log buffer cleared', 2000);
-        });
-
-        // Help overlay
-        s.key(['?', 'h'], () => this._toggleHelp());
-        s.key(['escape'], () => {
-            if (this.helpOverlay && !this.helpOverlay.hidden) this._toggleHelp();
+        const key = (keys, handler) => this.screen.key(keys, () => { if (!this._modal) handler(); });
+        key(['q'], () => this._requestQuit());
+        this.screen.key(['C-c'], () => this.eventBus.publish('app:quit'));
+        key(['tab'], () => this._focus((this._focusedPanel + 1) % 3));
+        key(['S-tab'], () => this._focus((this._focusedPanel + 2) % 3));
+        ['1', '2', '3'].forEach((n, i) => key([n], () => this._focus(i)));
+        key(['z'], () => { this._zoomed = !this._zoomed; this._applyLayout(); });
+        for (const [keys, command] of [[['s'], 'start'], [['x'], 'stop'], [['p'], 'pause'], [['r'], 'resume'], [['C-r'], 'restart']]) key(keys, () => this._controlFocused(command));
+        key(['f'], () => { this.mainPanel.cycleFilter(); this._refresh(); });
+        key(['m'], () => { this._focus(0); this.mainPanel.toggleView(); this._refresh(); });
+        key(['i'], () => { this._focus(0); this.mainPanel.setView('inbox'); this._refresh(); });
+        key(['/'], () => this._search());
+        for (const [keys, field] of [[['v'], 'source'], [['t'], 'status'], [['o'], 'sort']]) key(keys, () => this._inboxAction(() => this.mainPanel.inbox.cycle(field)));
+        key(['b'], () => this._inboxAction(() => this.mainPanel.inbox.toggle('favorite')));
+        key(['a'], () => this._inboxAction(() => this.mainPanel.inbox.toggle('archived')));
+        key(['y'], () => this._inboxAction(() => this._copyAddress()));
+        key(['e'], () => this._export('json'));
+        key(['C-e'], () => this._export('csv'));
+        key(['c'], () => { this.mainPanel.clear(); this._showNotice(this.mainPanel.view === 'inbox' ? 'Search cleared' : 'Feed cleared'); });
+        this.screen.key(['?', 'h'], () => { if (this._modal !== 'search') this._toggleHelp(); });
+        this.screen.key(['escape'], () => {
+            if (this._modal === 'help') this._toggleHelp();
         });
     }
 
-    /** Toggles the help overlay's visibility. */
+    _focus(index) {
+        this._focusedPanel = index;
+        this._applyLayout();
+        [this.mainPanel, this.twitchPanel, this.kickPanel][index].focus();
+    }
+    _inboxAction(action) {
+        if (this._focusedPanel !== 0 || this.mainPanel.view !== 'inbox') return;
+        action();
+        this._refresh();
+    }
+    _search() {
+        this._focus(0);
+        this.mainPanel.setView('inbox');
+        this._modal = 'search';
+        this.prompt.setFront();
+        this.prompt.readInput('Find server address, streamer or evidence (empty clears)', this.mainPanel.inbox.filters.search, (error, text) => {
+            this._modal = null;
+            if (!error && text !== null && text !== undefined) this.mainPanel.inbox.search(text);
+            this.mainPanel.focus();
+            this._refresh();
+        });
+    }
     _toggleHelp() {
-        if (!this.helpOverlay) return;
-        this.helpOverlay.toggle();
+        if (this._modal === 'help') {
+            this.helpOverlay.hide();
+            this._modal = null;
+            this.screen.restoreFocus();
+        } else {
+            this._modal = 'help';
+            this.screen.saveFocus();
+            this.helpOverlay.show();
+            this.helpOverlay.setFront();
+            this.helpOverlay.focus();
+        }
         this.screen.render();
     }
-
-    /** Arms the quit confirmation; quits on the second press within 3s. */
     _requestQuit() {
-        if (this._quitArmed) {
-            this.eventBus.publish('app:quit');
-            return;
-        }
+        if (this._quitArmed) { this.eventBus.publish('app:quit'); return; }
         this._quitArmed = true;
-        this._showNotice('Press Q again to quit', 3000);
-        setTimeout(() => { this._quitArmed = false; }, 3000);
+        this._showNotice('Press Q again to quit');
+        clearTimeout(this._quitTimer);
+        this._quitTimer = setTimeout(() => { this._quitArmed = false; }, 3000);
     }
-
-    /** Exports the log buffer to a file and reports the path. */
-    _exportLogs() {
+    _showNotice(text) { this._notice = { text, until: Date.now() + 3000 }; this._refresh(); }
+    _copyAddress() {
+        const address = this.mainPanel.inbox.selectedAddress;
+        if (!address) { this._showNotice('Select a server first'); return; }
+        // OSC 52 is supported by many SSH terminals. Always display the address
+        // too, so terminals that disable clipboard integration remain usable.
+        this.screen.program.write(`\x1b]52;c;${Buffer.from(address).toString('base64')}\x07`);
+        this._showNotice(`Copy requested: ${address}`);
+    }
+    _export(format) {
         try {
-            const filePath = this.logManager.exportToFile();
-            this.eventBus.publish('log', {
-                source: 'app',
-                level: 'info',
-                message: `Logs exported → ${filePath}`,
-                timestamp: new Date(),
-            });
-        } catch (err) {
-            this.eventBus.publish('log', {
-                source: 'app',
-                level: 'error',
-                message: `Log export failed: ${err.message}`,
-                timestamp: new Date(),
-            });
-        }
-        this._refresh();
+            const file = this.mainPanel.view === 'inbox'
+                ? this.discoveries.export(format, this.mainPanel.inbox.filters)
+                : this.logManager.exportToFile();
+            this.eventBus.publish('log', { source: 'app', level: 'info', message: `Exported: ${file}`, timestamp: new Date() });
+            this._showNotice(`Exported: ${file}`);
+        } catch (error) { this._showNotice(`Export failed: ${error.message}`); }
     }
-
-    /**
-     * Shows a transient message in the control bar.
-     * @param {string} text
-     * @param {number} durationMs
-     */
-    _showNotice(text, durationMs) {
-        this._notice = { text, until: Date.now() + durationMs };
-        this._refresh();
-    }
-
-    /** Repositions panels according to focus + zoom state. */
     _applyLayout() {
+        if (!this.screen) return;
+        const compact = this.screen.width < 110 || this.screen.height < 36;
+        const solo = this._zoomed || compact;
+        const mainHeight = Math.max(18, Math.floor(this.screen.height * 0.62));
         const panels = [this.mainPanel, this.twitchPanel, this.kickPanel];
         panels.forEach((panel, i) => {
             const el = panel.container;
-            if (this._zoomed && i !== this._focusedPanel) {
-                el.hide();
-                return;
-            }
-            const geo = this._zoomed ? ZOOM_GEOMETRY : PANEL_GEOMETRY[i];
-            el.top = geo.top;
-            el.left = geo.left;
-            el.width = geo.width;
-            el.height = geo.height;
+            if (solo && i !== this._focusedPanel) { el.hide(); return; }
+            el.top = solo || i === 0 ? 1 : mainHeight + 1;
+            el.left = solo || i !== 2 ? 0 : '50%';
+            el.width = solo || i === 0 ? '100%' : '50%';
+            el.height = solo ? this.screen.height - 1 : i === 0 ? mainHeight : this.screen.height - mainHeight - 1;
+            el.style.border.fg = i === this._focusedPanel ? 'white' : i === 1 ? '#9146FF' : i === 2 ? '#53FC18' : 'cyan';
             el.show();
         });
+        this.mainPanel.resize();
+        this.twitchPanel.resize();
+        this.kickPanel.resize();
+        this.mainPanel.inbox.refresh(true);
+        this._compact = compact;
         this._refresh();
     }
-
-    /** Focuses the currently selected panel. */
-    _focusCurrentPanel() {
-        switch (this._focusedPanel) {
-            case 0: this.mainPanel.focus(); break;
-            case 1: this.twitchPanel.focus(); break;
-            case 2: this.kickPanel.focus(); break;
-        }
-        // If zoomed, zoom follows focus
-        if (this._zoomed) {
-            this._applyLayout();
-        } else {
-            this._refresh();
-        }
-    }
-
-    /**
-     * Runs a control command on the scraper that corresponds to the focused panel.
-     * If main panel is focused, the command targets both scrapers.
-     * @param {string} command
-     */
     async _controlFocused(command) {
-        if (this._focusedPanel === 1 || this._focusedPanel === 0) {
-            await this.controlManager.execute('twitch', command);
-        }
-        if (this._focusedPanel === 2 || this._focusedPanel === 0) {
-            await this.controlManager.execute('kick', command);
-        }
+        const targets = this._focusedPanel === 0 ? ['twitch', 'kick'] : [this._focusedPanel === 1 ? 'twitch' : 'kick'];
+        await Promise.all(targets.map(source => this.controlManager.execute(source, command)));
+        this._refresh();
     }
-
-    /** Refreshes all dynamic content on the screen. */
     _refresh() {
         if (!this.screen) return;
-        const tState = this.controlManager.getState('twitch');
-        const kState = this.controlManager.getState('kick');
-        const spinner = this._spinner();
-
-        if (this._notice && Date.now() > this._notice.until) this._notice = null;
-
-        const tStats = this.statsManager.getStats('twitch');
-        const kStats = this.statsManager.getStats('kick');
-        this.headerBar.setContent(formatHeaderBar({
-            focusedPanel: this._focusedPanel,
-            twitchState: tState,
-            kickState: kState,
-            spinner,
-            totalMatches: (tStats.matches || 0) + (kStats.matches || 0),
-            zoomed: this._zoomed,
-        }));
-
-        this.mainPanel.update(tState, kState, {
-            spinner,
-            notice: this._notice ? this._notice.text : null,
-        });
-        this.twitchPanel.updateStatus(tState, { spinner });
-        this.kickPanel.updateStatus(kState, { spinner });
+        const twitchState = this.controlManager.getState('twitch');
+        const kickState = this.controlManager.getState('kick');
+        const spinner = SPINNER_FRAMES[this._spinnerIndex];
+        if (this._notice && this._notice.until < Date.now()) this._notice = null;
+        this.headerBar.setContent(formatHeaderBar({ focusedPanel: this._focusedPanel, twitchState, kickState, spinner, zoomed: this._zoomed, compact: this._compact, demo: this.demo, serverCount: this.discoveries.records.size }));
+        this.mainPanel.update(twitchState, kickState, { spinner, notice: this._notice?.text });
+        this.twitchPanel.updateStatus(twitchState, { spinner });
+        this.kickPanel.updateStatus(kickState, { spinner });
         this.screen.render();
     }
-
-    /** Tears down the screen and clears intervals. */
     destroy() {
-        if (this._refreshInterval) clearInterval(this._refreshInterval);
-        if (this.screen) {
-            this.screen.destroy();
-            this.screen = null;
-        }
+        clearInterval(this._refreshInterval);
+        clearTimeout(this._quitTimer);
+        this.eventBus.unsubscribe('state', this._stateHandler);
+        this.mainPanel?.destroy();
+        this.twitchPanel?.destroy();
+        this.kickPanel?.destroy();
+        this.screen?.destroy();
+        this.screen = null;
     }
 }
-
 module.exports = TerminalUI;

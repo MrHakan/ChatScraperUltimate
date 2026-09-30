@@ -1,62 +1,36 @@
 "use strict";
-
 const blessed = require('blessed');
 
-/**
- * Centered modal listing every keyboard shortcut.
- * Why: The app has grown enough hotkeys that discoverability matters;
- * a toggleable cheat-sheet beats memorizing the README.
- * @module HelpOverlay
- * @param {blessed.Widgets.Screen} screen
- * @returns {blessed.Widgets.BoxElement}
- */
 function createHelpOverlay(screen) {
-    const box = blessed.box({
-        parent: screen,
-        label: ' Keyboard Shortcuts ',
-        top: 'center',
-        left: 'center',
-        width: 62,
-        height: 22,
-        border: { type: 'line' },
-        style: {
-            border: { fg: 'cyan' },
-            label: { fg: 'cyan', bold: true },
-            fg: 'white',
-            bg: 'black',
-        },
-        tags: true,
-        hidden: true,
-        content: buildHelpContent(),
-    });
-    box.setIndex(100); // always on top
-    return box;
-}
-
-/** @returns {string} Formatted help text */
-function buildHelpContent() {
-    const key = (k) => `{cyan-fg}${k.padEnd(8)}{/cyan-fg}`;
-    const section = (t) => `\n{bold}{yellow-fg}${t}{/yellow-fg}{/bold}`;
-    return [
-        section('Panels'),
-        ` ${key('Tab')} Cycle panel focus`,
-        ` ${key('1 / 2 / 3')} Focus Main / Twitch / Kick`,
-        ` ${key('Z')} Zoom focused panel (tmux-style)`,
-        section('Scraper control  (targets focused panel)'),
-        ` ${key('S')} Start    ${key('X')} Stop`,
-        ` ${key('P')} Pause    ${key('R')} Resume`,
-        ` ${key('Ctrl+R')} Restart`,
-        section('Logs'),
-        ` ${key('F')} Cycle level filter (ALL→INFO→WARN→ERROR)`,
-        ` ${key('M')} Toggle Logs / Matches view`,
-        ` ${key('E')} Export log buffer to file`,
-        ` ${key('C')} Clear log buffer`,
-        section('General'),
-        ` ${key('?  or H')} Toggle this help`,
-        ` ${key('Q')} Quit (press twice)   ${key('Ctrl+C')} Force quit`,
+    return blessed.box({ parent: screen, label: ' Keyboard shortcuts ', top: 'center', left: 'center', width: '90%', height: '90%', border: 'line', tags: true, hidden: true, scrollable: true, keys: true, mouse: true, scrollbar: { bg: 'cyan' }, style: { border: { fg: 'cyan' }, bg: 'black', fg: 'white' }, content: [
+        '{cyan-fg}{bold}DISCOVERY INBOX{/bold}{/cyan-fg}',
+        'I          Show inbox',
+        '/          Search addresses, streamers and evidence',
+        'Up/Down    Select server   Enter: focus evidence',
+        'PgUp/PgDn  Move by ten servers',
+        'V / F      Filter source: all / Twitch / Kick',
+        'T          Active / favorites / archived',
+        'O          Sort: recent / most seen / address',
+        'B          Toggle favorite   A: archive / restore',
+        'Y          Copy address (OSC 52; terminal support required)',
+        'E / Ctrl+E Export visible records as JSON / CSV',
+        'C          Clear search (history is retained)',
         '',
-        '{gray-fg}          Press ?, H or Esc to close{/gray-fg}',
-    ].join('\n');
+        '{cyan-fg}{bold}WORKSPACE{/bold}{/cyan-fg}',
+        'Tab / Shift+Tab   Cycle panel focus',
+        '1 / 2 / 3        Focus workspace / Twitch / Kick',
+        'Z                Zoom focused panel',
+        'M                Cycle inbox / logs / matches',
+        '',
+        '{cyan-fg}{bold}SCRAPERS (focused source; workspace targets both){/bold}{/cyan-fg}',
+        'S Start   X Stop   P Pause   R Resume   Ctrl+R Restart',
+        '',
+        '{cyan-fg}{bold}LOGS / MATCHES{/bold}{/cyan-fg}',
+        'F          Filter log level: all / info / warn / error',
+        'E          Export log buffer   C: clear visible feed',
+        '',
+        'Q twice: quit   Ctrl+C: quit   ? / H / Esc: close help',
+        '{gray-fg}Small terminals show one panel at a time. Tab switches it.{/gray-fg}',
+    ].join('\n') });
 }
-
 module.exports = { createHelpOverlay };

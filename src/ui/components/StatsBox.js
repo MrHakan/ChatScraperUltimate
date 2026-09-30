@@ -27,6 +27,7 @@ function createStatsBox(parent, { label, color, top, left, width, height }) {
             fg: 'white',
         },
         tags: true,
+        wrap: false,
         padding: { left: 1 },
         content: '',
     });

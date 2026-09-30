@@ -23,6 +23,7 @@ function createControlBar(parent, { top, left, width, height, color }) {
             fg: 'white',
         },
         tags: true,
+        wrap: false,
         padding: { left: 1 },
         content: '',
     });

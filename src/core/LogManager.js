@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { LEVEL_COLORS, SOURCE_COLORS } = require('../utils/colors');
+const { safe } = require('../utils/display');
 
 /**
  * Aggregates log events from all sources into a scrollback buffer.
@@ -71,10 +72,10 @@ class LogManager {
         const lvlColor = LEVEL_COLORS[level] || 'white';
         const srcColor = SOURCE_COLORS[(entry.source || '').toLowerCase()] || 'white';
         const lvl = level.toUpperCase().padEnd(5);
-        const src = (entry.source || '?').toUpperCase().padEnd(6);
+        const src = safe((entry.source || '?').toUpperCase().padEnd(6));
         const msg = level === 'error'
-            ? `{red-fg}${entry.message}{/red-fg}`
-            : entry.message;
+            ? `{red-fg}${safe(entry.message)}{/red-fg}`
+            : safe(entry.message);
         return `{gray-fg}${ts}{/gray-fg} {${srcColor}-fg}${src}{/${srcColor}-fg} {${lvlColor}-fg}${lvl}{/${lvlColor}-fg} ${msg}`;
     }
 

@@ -25,6 +25,7 @@ function createLogBox(parent, { label, color, top, left, width, height }) {
             bg: 'default',
         },
         tags: true,
+        scrollback: 500,
         scrollable: true,
         alwaysScroll: true,
         scrollbar: {

@@ -1,12 +1,11 @@
 "use strict";
 
 const assert = require('node:assert/strict');
-const puppeteer = require('puppeteer-extra');
-puppeteer.use(require('puppeteer-extra-plugin-stealth')());
+const { launchBrowser } = require('../src/utils/browser');
 
 (async () => {
     const controller = new AbortController();
-    const browser = await puppeteer.launch({ headless: true, signal: controller.signal, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const browser = await launchBrowser({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] }, controller.signal);
     try {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 720 });

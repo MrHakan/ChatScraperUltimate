@@ -2,6 +2,7 @@
 
 const BaseScraper = require('./BaseScraper');
 const { matchText } = require('../utils/domains');
+const { launchBrowser } = require('../utils/browser');
 
 class KickScraper extends BaseScraper {
     constructor(config, eventBus) {
@@ -12,14 +13,11 @@ class KickScraper extends BaseScraper {
     }
 
     async initialize() {
-        const puppeteer = require('puppeteer-extra');
-        const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-        if (!this._stealthInstalled) { puppeteer.use(StealthPlugin()); this._stealthInstalled = true; }
         await this._closeBrowser();
         this._browserAbort = new AbortController();
         this.log('info', 'Launching Kick browser');
         try {
-            this.browser = await puppeteer.launch({ signal: this._browserAbort.signal, headless: this.config.headless !== false, args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1280,720'] });
+            this.browser = await launchBrowser({ headless: this.config.headless !== false, args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1280,720'] }, this._browserAbort.signal);
             this.page = await this.browser.newPage();
             await this.page.setViewport({ width: 1280, height: 720 });
             await this.page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
